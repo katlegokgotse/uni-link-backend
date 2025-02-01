@@ -7,9 +7,10 @@ import os
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://retailerdb_user:ruQ9WrHQ11zAe0ZgwYNgBdwycb4Yp6wt@dpg-cue9vidsvqrc73d7ese0-a.oregon-postgres.render.com/retailerdb'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.app_context().push()
+
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
+app.app_context().push()
 db.create_all()
 # Models
 class Student(db.Model):
@@ -126,5 +127,6 @@ def apply(student_id, university_id):
     return application_schema.jsonify(application)
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
     db.create_all()
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)

@@ -96,6 +96,14 @@ document_schema = DocumentSchema()
 documents_schema = DocumentSchema(many=True)
 
 # Routes
+@app.route('/', methods=['GET'])
+def home():
+   return '''
+   
+        <p style="text-align: center; font-size: 48px;">
+            Welcome to UniLink Backend service
+        </p>
+    '''
 @app.route('/students', methods=['POST'])
 def add_student():
     name = request.json['name']

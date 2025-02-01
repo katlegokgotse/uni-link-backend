@@ -7,37 +7,68 @@ import os
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://retailerdb_user:ruQ9WrHQ11zAe0ZgwYNgBdwycb4Yp6wt@dpg-cue9vidsvqrc73d7ese0-a.oregon-postgres.render.com/retailerdb'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
+app.app_context().push()
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
-
+db.create_all()
 # Models
 class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
+    date_of_birth = db.Column(db.Date, nullable=False)
+    contact_number = db.Column(db.String(15), nullable=False)
+    email = db.Column(db.String(100), nullable=False)
+    address = db.Column(db.String(255), nullable=False)
     marks = db.Column(db.Float, nullable=False)
+    gpa = db.Column(db.Float, nullable=False)
+    applications = db.relationship('Application', backref='student', lazy=True)
 
 class University(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
-    required_marks = db.Column(db.Float, nullable=False)
+    location = db.Column(db.String(255), nullable=False)
+    contact_number = db.Column(db.String(15), nullable=False)
+    email = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    courses = db.relationship('Course', backref='university', lazy=True)
+    applications = db.relationship('Application', backref='university', lazy=True)
 
 class Application(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
     university_id = db.Column(db.Integer, db.ForeignKey('university.id'), nullable=False)
     course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    application_date = db.Column(db.DateTime, default=db.func.current_timestamp(), nullable=False)
+    decision_date = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(50), default='Pending')
+    application_fee = db.Column(db.Float, nullable=False)
+    notes = db.Column(db.Text, nullable=True)
 
 class Course(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
-    aps_requirement = db.Column(db.Int, nullable=False)
+    duration = db.Column(db.String(50), nullable=False)  # e.g., "4 years", "2 years"
+    tuition_fees = db.Column(db.Float, nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    aps_requirement = db.Column(db.Integer, nullable=False)
+    university_id = db.Column(db.Integer, db.ForeignKey('university.id'), nullable=False)
+    applications = db.relationship('Application', backref='course', lazy=True)
+
+class Document(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey('application.id'), nullable=False)
+    document_type = db.Column(db.String(100), nullable=False)  # e.g., Transcript, Recommendation Letter
+    file_path = db.Column(db.String(255), nullable=False)  # Path to the uploaded file
+    uploaded_date = db.Column(db.DateTime, default=db.func.current_timestamp(), nullable=False)
 
 #Schema
 class CourseSchema(ma.SQLAlchemyAutoSchema):
     class Meta:
         model = Course
+
+class DocumentSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Document
 
 # Schemas
 class StudentSchema(ma.SQLAlchemyAutoSchema):
@@ -58,6 +89,10 @@ university_schema = UniversitySchema()
 universities_schema = UniversitySchema(many=True)
 application_schema = ApplicationSchema()
 applications_schema = ApplicationSchema(many=True)
+course_schema = CourseSchema()
+courses_schema = CourseSchema(many=True)
+document_schema = DocumentSchema()
+documents_schema = DocumentSchema(many=True)
 
 # Routes
 @app.route('/students', methods=['POST'])

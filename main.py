@@ -13,6 +13,12 @@ ma = Marshmallow(app)
 app.app_context().push()
 db.create_all()
 # Models
+# User Model
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+
 class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -62,6 +68,9 @@ class Document(db.Model):
     file_path = db.Column(db.String(255), nullable=False)  # Path to the uploaded file
     uploaded_date = db.Column(db.DateTime, default=db.func.current_timestamp(), nullable=False)
 
+class UserSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = User
 #Schema
 class CourseSchema(ma.SQLAlchemyAutoSchema):
     class Meta:
@@ -99,19 +108,51 @@ documents_schema = DocumentSchema(many=True)
 @app.route('/', methods=['GET'])
 def home():
    return '''
-   
         <p style="text-align: center; font-size: 48px;">
             Welcome to UniLink Backend service
         </p>
     '''
-@app.route('/students', methods=['POST'])
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+    new_user = User(username=data['username'], password=hashed_password)
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({'message': 'User created successfully'}), 201
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    user = User.query.filter_by(username=data['username']).first()
+    if user and bcrypt.check_password_hash(user.password, data['password']):
+        access_token = create_access_token(identity=user.id, expires_delta=timedelta(hours=1))
+        return jsonify(access_token=access_token)
+    return jsonify({'message': 'Invalid credentials'}), 401
+
+@app.route('/students/register', methods=['POST'])
+@jwt_required()
 def add_student():
-    name = request.json['name']
-    marks = request.json['marks']
-    new_student = Student(name=name, marks=marks)
+    data = request.get_json()
+    new_student = Student(
+        name=data['name'],
+        date_of_birth=data['date_of_birth'],
+        contact_number=data['contact_number'],
+        email=data['email'],
+        address=data['address'],
+        marks=data['marks'],
+        gpa=data['gpa']
+    )
     db.session.add(new_student)
     db.session.commit()
-    return student_schema.jsonify(new_student)
+    return student_schema.jsonify(new_student), 201
+
+@app.route('/students', methods=['GET'])
+@jwt_required()
+def get_students():
+    students = Student.query.all()
+    return students_schema.jsonify(students)
 
 @app.route('/universities', methods=['POST'])
 def add_university():

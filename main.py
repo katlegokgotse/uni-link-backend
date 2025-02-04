@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required
+from flask_jwt_extended import create_access_token, jwt_required
 from jwt.exceptions import PyJWTError
 from flask_bcrypt import Bcrypt
 import os
@@ -11,7 +11,6 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://retailerdb_user:ruQ9WrHQ11zAe0ZgwYNgBdwycb4Yp6wt@dpg-cue9vidsvqrc73d7ese0-a.oregon-postgres.render.com/retailerdb'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'
-jwt = JWTManager(app)
 bcrypt = Bcrypt(app)
 db = SQLAlchemy(app)
 ma = Marshmallow(app)

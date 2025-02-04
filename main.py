@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
-from flask_jwt_extended import create_access_token, jwt_required
-from jwt.exceptions import PyJWTError
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required
+
 from flask_bcrypt import Bcrypt
 import os
 
@@ -13,6 +13,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'
 bcrypt = Bcrypt(app)
 db = SQLAlchemy(app)
+jwt = JWTManager(app)
 ma = Marshmallow(app)
 app.app_context().push()
 db.create_all()

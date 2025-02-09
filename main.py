@@ -3,8 +3,10 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
+from flask_limiter import Limiter
 from datetime import timedelta
 import os
+import requests
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -12,6 +14,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://retailerdb_user:ruQ9WrHQ11
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'  # Change this to a secure key in production
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+YOCO_SECRET_KEY = "your_yoco_secret_key"
 
 bcrypt = Bcrypt(app)
 db = SQLAlchemy(app)
@@ -72,6 +75,17 @@ class Document(db.Model):
     document_type = db.Column(db.String(100), nullable=False)
     file_path = db.Column(db.String(255), nullable=False)
     uploaded_date = db.Column(db.DateTime, default=db.func.current_timestamp(), nullable=False)
+
+class Subscription(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    plan_name = db.Column(db.String(50), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(10), default="ZAR")
+    status = db.Column(db.String(20), default="active")
+    start_date = db.Column(db.DateTime, default=db.func.current_timestamp())
+    end_date = db.Column(db.DateTime, nullable=True)
+
 
 # Schemas
 class UserSchema(ma.SQLAlchemyAutoSchema):
@@ -281,6 +295,76 @@ def add_document():
 def get_documents():
     documents = Document.query.all()
     return documents_schema.jsonify(documents), 200
+
+@app.route('/subscribe', methods=['POST'])
+@jwt_required()
+def subscribe():
+    data = request.get_json()
+    user_id = get_jwt_identity()
+    amount = data.get('amount')  # Amount in cents (e.g., R100 = 10000)
+    plan_name = data.get('plan_name')
+    token = data.get('token')  # Yoco token from frontend
+
+    if not token or not amount or not plan_name:
+        return jsonify({'message': 'Missing required fields'}), 400
+
+    # Make Yoco API request
+    headers = {
+        "Content-Type": "application/json",
+        "X-Auth-Secret-Key": YOCO_SECRET_KEY
+    }
+    payload = {
+        "token": token,
+        "amountInCents": amount,
+        "currency": "ZAR"
+    }
+    yoco_response = requests.post("https://online.yoco.com/v1/charges/", json=payload, headers=headers)
+    
+    if yoco_response.status_code == 200:
+        payment_data = yoco_response.json()
+        
+        new_subscription = Subscription(
+            user_id=user_id,
+            plan_name=plan_name,
+            amount=amount / 100,  # Convert to Rands
+            status="active"
+        )
+        db.session.add(new_subscription)
+        db.session.commit()
+
+        return jsonify({'message': 'Subscription successful', 'subscription': plan_name}), 201
+
+    return jsonify({'message': 'Payment failed', 'error': yoco_response.json()}), 400
+
+@app.route('/subscriptions', methods=['GET'])
+@jwt_required()
+def get_subscriptions():
+    user_id = get_jwt_identity()
+    subscriptions = Subscription.query.filter_by(user_id=user_id).all()
+    return jsonify([{
+        "plan_name": sub.plan_name,
+        "amount": sub.amount,
+        "currency": sub.currency,
+        "status": sub.status,
+        "start_date": sub.start_date
+    } for sub in subscriptions]), 200
+
+@app.route('/subscriptions/cancel', methods=['POST'])
+@jwt_required()
+def cancel_subscription():
+    data = request.get_json()
+    subscription_id = data.get('subscription_id')
+    user_id = get_jwt_identity()
+
+    subscription = Subscription.query.filter_by(id=subscription_id, user_id=user_id).first()
+    
+    if not subscription:
+        return jsonify({'message': 'Subscription not found'}), 404
+
+    subscription.status = "cancelled"
+    db.session.commit()
+    
+    return jsonify({'message': 'Subscription cancelled successfully'}), 200
 
 @app.route('/protected', methods=['GET'])
 @jwt_required()

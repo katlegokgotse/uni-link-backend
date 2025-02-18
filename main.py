@@ -57,7 +57,9 @@ class Course(db.Model):
     aps_requirement = db.Column(db.Integer, nullable=False)
     university_id = db.Column(db.Integer, db.ForeignKey('university.id'), nullable=False)
     applications = db.relationship('Application', backref='course', lazy=True)
-
+    faculty = db.Column(db.String(100), nullable=False)
+    requirements = db.Column(db.String(255), nullable=False)
+    application_status = db.Column(db.String(50), default='Open')
 class Application(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
@@ -237,7 +239,37 @@ def add_course():
 def get_courses():
     courses = Course.query.all()
     return courses_schema.jsonify(courses), 200
+@app.route('/courses/saved_courses', methods=['GET'])
+def get_saved_courses():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({'message': 'user_id is required'}), 400
 
+    students = Student.query.filter_by(user_id=user_id).all()
+    if not students:
+        return jsonify([]), 200
+
+    student_ids = [student.id for student in students]
+    saved_apps = Application.query.filter(
+        Application.student_id.in_(student_ids),
+        Application.status == 'Saved'
+    ).all()
+
+    saved_courses = []
+    for app in saved_apps:
+        course = Course.query.get(app.course_id)
+        if course:
+            university = University.query.get(course.university_id)
+            saved_courses.append({
+                'status': course.application_status,
+                'university': university.name,
+                'course': course.name,
+                'aps': course.aps_requirement,
+                'requirements': course.requirements,
+                'faculty': course.faculty
+            })
+
+    return jsonify(saved_courses), 200
 @app.route('/apply', methods=['POST'])
 def apply():
     data = request.get_json()

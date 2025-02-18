@@ -93,7 +93,7 @@ func main() {
 	r.Use(securityHeaders())
 	r.Use(cors.Default())
 	r.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"http://127.0.0.1:5500"}, // Only allow frontend from localhost
+		AllowOrigins: []string{"http://127.0.0.1:5500", "https://link-uni.netlify.app", "*"}, // Only allow frontend from localhost
 		AllowMethods: []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
 	}))

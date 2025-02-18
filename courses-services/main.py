@@ -140,62 +140,6 @@ def home():
         </p>
     '''
 
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    if not data or 'username' not in data or 'password' not in data:
-        return jsonify({'message': 'Username and password are required'}), 400
-
-    if User.query.filter_by(username=data['username']).first():
-        return jsonify({'message': 'Username already exists'}), 400
-
-    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
-    new_user = User(username=data['username'], password=hashed_password)
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify({'message': 'User created successfully'}), 201
-
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    if not data or 'username' not in data or 'password' not in data:
-        return jsonify({'message': 'Username and password are required'}), 400
-
-    user = User.query.filter_by(username=data['username']).first()
-    if user and bcrypt.check_password_hash(user.password, data['password']):
-        # Instead of returning a token, simply confirm login success
-        return jsonify({'message': 'Logged in successfully'}), 200
-    return jsonify({'message': 'Invalid credentials'}), 401
-
-@app.route('/students/register', methods=['POST'])
-def add_student():
-    data = request.get_json()
-    if not data:
-        return jsonify({'message': 'No input data provided'}), 400
-
-    user_id = data.get('user_id')
-    if not user_id:
-        return jsonify({'message': 'user_id is required'}), 400
-
-    new_student = Student(
-        user_id=user_id,
-        name=data['name'],
-        date_of_birth=data['date_of_birth'],
-        contact_number=data['contact_number'],
-        email=data['email'],
-        address=data['address'],
-        marks=data['marks'],
-        gpa=data['gpa']
-    )
-    db.session.add(new_student)
-    db.session.commit()
-    return student_schema.jsonify(new_student), 201
-
-@app.route('/students', methods=['GET'])
-def get_students():
-    students = Student.query.all()
-    return students_schema.jsonify(students), 200
-
 @app.route('/universities', methods=['POST'])
 def add_university():
     data = request.get_json()

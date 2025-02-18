@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from flask_bcrypt import Bcrypt
 from flask_limiter import Limiter
+from flask_cors import CORS
 from datetime import timedelta
 import os
 import requests
@@ -12,7 +13,7 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://retailerdb_user:ruQ9WrHQ11zAe0ZgwYNgBdwycb4Yp6wt@dpg-cue9vidsvqrc73d7ese0-a.oregon-postgres.render.com/retailerdb'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Removed JWT configuration
-
+CORS(app)
 bcrypt = Bcrypt(app)
 db = SQLAlchemy(app)
 ma = Marshmallow(app)

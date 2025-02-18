@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
 from flask_limiter import Limiter
 from datetime import timedelta
@@ -12,25 +11,24 @@ import requests
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://retailerdb_user:ruQ9WrHQ11zAe0ZgwYNgBdwycb4Yp6wt@dpg-cue9vidsvqrc73d7ese0-a.oregon-postgres.render.com/retailerdb'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = 'your-secret-key'  # Change this to a secure key in production
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
-YOCO_SECRET_KEY = "your_yoco_secret_key"
+# Removed JWT configuration
 
 bcrypt = Bcrypt(app)
 db = SQLAlchemy(app)
-jwt = JWTManager(app)
 ma = Marshmallow(app)
+
+YOCO_SECRET_KEY = "your_yoco_secret_key"
 
 # Models
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
-    # You might add relationships here if needed, e.g. to subscriptions or students
+    # Additional relationships can be added as needed
 
 class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # Added to link a student to a user
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     date_of_birth = db.Column(db.Date, nullable=False)
     contact_number = db.Column(db.String(15), nullable=False)
@@ -162,18 +160,20 @@ def login():
 
     user = User.query.filter_by(username=data['username']).first()
     if user and bcrypt.check_password_hash(user.password, data['password']):
-        access_token = create_access_token(identity=user.id)
-        return jsonify(access_token=access_token), 200
+        # Instead of returning a token, simply confirm login success
+        return jsonify({'message': 'Logged in successfully'}), 200
     return jsonify({'message': 'Invalid credentials'}), 401
 
 @app.route('/students/register', methods=['POST'])
-@jwt_required()
 def add_student():
     data = request.get_json()
     if not data:
         return jsonify({'message': 'No input data provided'}), 400
 
-    user_id = get_jwt_identity()  # Link the student to the logged-in user
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'message': 'user_id is required'}), 400
+
     new_student = Student(
         user_id=user_id,
         name=data['name'],
@@ -189,13 +189,11 @@ def add_student():
     return student_schema.jsonify(new_student), 201
 
 @app.route('/students', methods=['GET'])
-@jwt_required()
 def get_students():
     students = Student.query.all()
     return students_schema.jsonify(students), 200
 
 @app.route('/universities', methods=['POST'])
-@jwt_required()
 def add_university():
     data = request.get_json()
     if not data:
@@ -213,13 +211,11 @@ def add_university():
     return university_schema.jsonify(new_university), 201
 
 @app.route('/universities', methods=['GET'])
-@jwt_required()
 def get_universities():
     universities = University.query.all()
     return universities_schema.jsonify(universities), 200
 
 @app.route('/courses', methods=['POST'])
-@jwt_required()
 def add_course():
     data = request.get_json()
     if not data:
@@ -238,13 +234,11 @@ def add_course():
     return course_schema.jsonify(new_course), 201
 
 @app.route('/courses', methods=['GET'])
-@jwt_required()
 def get_courses():
     courses = Course.query.all()
     return courses_schema.jsonify(courses), 200
 
 @app.route('/apply', methods=['POST'])
-@jwt_required()
 def apply():
     data = request.get_json()
     if not data:
@@ -277,41 +271,39 @@ def apply():
     return application_schema.jsonify(new_application), 201
 
 @app.route('/applications', methods=['GET'])
-@jwt_required()
 def get_applications():
     applications = Application.query.all()
     return applications_schema.jsonify(applications), 200
 
 @app.route('/applications/save', methods=['POST'])
-@jwt_required()
 def save_application():
     data = request.get_json()
-    user_id = get_jwt_identity()  # Get logged-in user ID
+    if not data:
+        return jsonify({'message': 'No input data provided'}), 400
 
-    # Validate required fields
-    required_fields = ['student_id', 'university_id', 'course_id', 'application_fee']
+    required_fields = ['student_id', 'university_id', 'course_id', 'application_fee', 'user_id']
     if not all(field in data for field in required_fields):
         return jsonify({'message': 'Missing required fields'}), 400
+
+    user_id = data.get('user_id')
 
     student = Student.query.get(data['student_id'])
     university = University.query.get(data['university_id'])
     course = Course.query.get(data['course_id'])
 
-    # Check if related records exist
     if not student or not university or not course:
         return jsonify({'message': 'Invalid student, university, or course ID'}), 404
 
-    # Ensure that the student belongs to the logged-in user
+    # Ensure that the student belongs to the provided user_id
     if student.user_id != user_id:
         return jsonify({'message': 'Unauthorized'}), 403
 
-    # Create new application
     new_application = Application(
         student_id=data['student_id'],
         university_id=data['university_id'],
         course_id=data['course_id'],
         application_fee=data['application_fee'],
-        status='Saved'  # Mark application as saved (not submitted yet)
+        status='Saved'
     )
 
     db.session.add(new_application)
@@ -320,9 +312,7 @@ def save_application():
     return jsonify({'message': 'Application saved successfully', 'application': application_schema.dump(new_application)}), 201
 
 @app.route('/documents', methods=['POST'])
-@jwt_required()
 def add_document_json():
-    # This endpoint accepts JSON data to add a document record.
     data = request.get_json()
     if not data:
         return jsonify({'message': 'No input data provided'}), 400
@@ -337,15 +327,12 @@ def add_document_json():
     return document_schema.jsonify(new_document), 201
 
 @app.route('/documents', methods=['GET'])
-@jwt_required()
 def get_documents():
     documents = Document.query.all()
     return documents_schema.jsonify(documents), 200
 
 @app.route('/documents/upload', methods=['POST'])
-@jwt_required()
 def upload_document():
-    # This endpoint handles file upload
     if 'file' not in request.files:
         return jsonify({'message': 'No file part'}), 400
 
@@ -353,13 +340,11 @@ def upload_document():
     if file.filename == '':
         return jsonify({'message': 'No selected file'}), 400
 
-    # Save the file to a directory, e.g., "uploads/"
     upload_folder = 'uploads'
     os.makedirs(upload_folder, exist_ok=True)
     file_path = os.path.join(upload_folder, file.filename)
     file.save(file_path)
     
-    # Create a new Document entry; additional form data can be provided as needed
     new_document = Document(
         application_id=request.form.get('application_id', 0),
         document_type=request.form.get('document_type', 'report_card'),
@@ -370,18 +355,19 @@ def upload_document():
     return document_schema.jsonify(new_document), 201
 
 @app.route('/subscribe', methods=['POST'])
-@jwt_required()
 def subscribe():
     data = request.get_json()
-    user_id = get_jwt_identity()
-    amount = data.get('amount')  # Amount in cents (e.g., R100 = 10000)
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'message': 'user_id is required'}), 400
+
+    amount = data.get('amount')
     plan_name = data.get('plan_name')
-    token = data.get('token')  # Yoco token from frontend
+    token = data.get('token')
 
     if not token or not amount or not plan_name:
         return jsonify({'message': 'Missing required fields'}), 400
 
-    # Make Yoco API request
     headers = {
         "Content-Type": "application/json",
         "X-Auth-Secret-Key": YOCO_SECRET_KEY
@@ -399,7 +385,7 @@ def subscribe():
         new_subscription = Subscription(
             user_id=user_id,
             plan_name=plan_name,
-            amount=amount / 100,  # Convert to Rands
+            amount=amount / 100,
             status="active"
         )
         db.session.add(new_subscription)
@@ -410,9 +396,10 @@ def subscribe():
     return jsonify({'message': 'Payment failed', 'error': yoco_response.json()}), 400
 
 @app.route('/subscriptions', methods=['GET'])
-@jwt_required()
 def get_subscriptions():
-    user_id = get_jwt_identity()
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({'message': 'user_id is required as a query parameter'}), 400
     subscriptions = Subscription.query.filter_by(user_id=user_id).all()
     return jsonify([{
         "plan_name": sub.plan_name,
@@ -423,11 +410,13 @@ def get_subscriptions():
     } for sub in subscriptions]), 200
 
 @app.route('/subscriptions/cancel', methods=['POST'])
-@jwt_required()
 def cancel_subscription():
     data = request.get_json()
     subscription_id = data.get('subscription_id')
-    user_id = get_jwt_identity()
+    user_id = data.get('user_id')
+
+    if not subscription_id or not user_id:
+        return jsonify({'message': 'Missing subscription_id or user_id'}), 400
 
     subscription = Subscription.query.filter_by(id=subscription_id, user_id=user_id).first()
     
@@ -440,10 +429,8 @@ def cancel_subscription():
     return jsonify({'message': 'Subscription cancelled successfully'}), 200
 
 @app.route('/protected', methods=['GET'])
-@jwt_required()
 def protected():
-    current_user = get_jwt_identity()
-    return jsonify({'message': 'Access granted', 'user_id': current_user}), 200
+    return jsonify({'message': 'Access granted'}), 200
 
 if __name__ == '__main__':
     with app.app_context():

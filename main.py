@@ -26,9 +26,11 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
+    # You might add relationships here if needed, e.g. to subscriptions or students
 
 class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # Added to link a student to a user
     name = db.Column(db.String(100), nullable=False)
     date_of_birth = db.Column(db.Date, nullable=False)
     contact_number = db.Column(db.String(15), nullable=False)
@@ -86,7 +88,6 @@ class Subscription(db.Model):
     start_date = db.Column(db.DateTime, default=db.func.current_timestamp())
     end_date = db.Column(db.DateTime, nullable=True)
 
-
 # Schemas
 class UserSchema(ma.SQLAlchemyAutoSchema):
     class Meta:
@@ -112,6 +113,10 @@ class DocumentSchema(ma.SQLAlchemyAutoSchema):
     class Meta:
         model = Document
 
+class SubscriptionSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Subscription
+
 user_schema = UserSchema()
 student_schema = StudentSchema()
 students_schema = StudentSchema(many=True)
@@ -123,6 +128,7 @@ application_schema = ApplicationSchema()
 applications_schema = ApplicationSchema(many=True)
 document_schema = DocumentSchema()
 documents_schema = DocumentSchema(many=True)
+subscription_schema = SubscriptionSchema()
 
 # Routes
 @app.route('/', methods=['GET'])
@@ -136,7 +142,7 @@ def home():
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-    if not data or not 'username' not in data or 'password' not in data:
+    if not data or 'username' not in data or 'password' not in data:
         return jsonify({'message': 'Username and password are required'}), 400
 
     if User.query.filter_by(username=data['username']).first():
@@ -167,7 +173,9 @@ def add_student():
     if not data:
         return jsonify({'message': 'No input data provided'}), 400
 
+    user_id = get_jwt_identity()  # Link the student to the logged-in user
     new_student = Student(
+        user_id=user_id,
         name=data['name'],
         date_of_birth=data['date_of_birth'],
         contact_number=data['contact_number'],
@@ -274,9 +282,47 @@ def get_applications():
     applications = Application.query.all()
     return applications_schema.jsonify(applications), 200
 
+@app.route('/applications/save', methods=['POST'])
+@jwt_required()
+def save_application():
+    data = request.get_json()
+    user_id = get_jwt_identity()  # Get logged-in user ID
+
+    # Validate required fields
+    required_fields = ['student_id', 'university_id', 'course_id', 'application_fee']
+    if not all(field in data for field in required_fields):
+        return jsonify({'message': 'Missing required fields'}), 400
+
+    student = Student.query.get(data['student_id'])
+    university = University.query.get(data['university_id'])
+    course = Course.query.get(data['course_id'])
+
+    # Check if related records exist
+    if not student or not university or not course:
+        return jsonify({'message': 'Invalid student, university, or course ID'}), 404
+
+    # Ensure that the student belongs to the logged-in user
+    if student.user_id != user_id:
+        return jsonify({'message': 'Unauthorized'}), 403
+
+    # Create new application
+    new_application = Application(
+        student_id=data['student_id'],
+        university_id=data['university_id'],
+        course_id=data['course_id'],
+        application_fee=data['application_fee'],
+        status='Saved'  # Mark application as saved (not submitted yet)
+    )
+
+    db.session.add(new_application)
+    db.session.commit()
+
+    return jsonify({'message': 'Application saved successfully', 'application': application_schema.dump(new_application)}), 201
+
 @app.route('/documents', methods=['POST'])
 @jwt_required()
-def add_document():
+def add_document_json():
+    # This endpoint accepts JSON data to add a document record.
     data = request.get_json()
     if not data:
         return jsonify({'message': 'No input data provided'}), 400
@@ -295,6 +341,33 @@ def add_document():
 def get_documents():
     documents = Document.query.all()
     return documents_schema.jsonify(documents), 200
+
+@app.route('/documents/upload', methods=['POST'])
+@jwt_required()
+def upload_document():
+    # This endpoint handles file upload
+    if 'file' not in request.files:
+        return jsonify({'message': 'No file part'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'message': 'No selected file'}), 400
+
+    # Save the file to a directory, e.g., "uploads/"
+    upload_folder = 'uploads'
+    os.makedirs(upload_folder, exist_ok=True)
+    file_path = os.path.join(upload_folder, file.filename)
+    file.save(file_path)
+    
+    # Create a new Document entry; additional form data can be provided as needed
+    new_document = Document(
+        application_id=request.form.get('application_id', 0),
+        document_type=request.form.get('document_type', 'report_card'),
+        file_path=file_path
+    )
+    db.session.add(new_document)
+    db.session.commit()
+    return document_schema.jsonify(new_document), 201
 
 @app.route('/subscribe', methods=['POST'])
 @jwt_required()

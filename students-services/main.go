@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
@@ -90,9 +91,12 @@ func main() {
 
 	// Add security headers middleware
 	r.Use(securityHeaders())
-
-	// Rate limiting middleware could be added here
-
+	r.Use(cors.Default())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"http://127.0.0.1:5500"}, // Only allow frontend from localhost
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
+	}))
 	// Public routes
 	r.GET("/", documentation)
 	r.POST("/register", register)

@@ -1,228 +1,329 @@
 package main
 
 import (
+	"fmt"
 	"log"
-	"os"
+	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
-	"github.com/gin-contrib/cors"
-	"github.com/gin-contrib/logger"
-	"github.com/gin-contrib/secure"
 	"github.com/gin-gonic/gin"
-	"github.com/go-playground/validator/v10"
-	"github.com/ulule/limiter/v3"
-	"github.com/ulule/limiter/v3/drivers/middleware/gin"
-	"github.com/ulule/limiter/v3/drivers/store/memory"
+	"github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-var (
-	db       *gorm.DB
-	err      error
-	validate *validator.Validate
-	jwtKey   []byte
+// Configuration constants
+const (
+	MinPasswordLength = 8
+	JWTSecret         = "your-secret-key-here" // In production, use environment variable
+	TokenExpiration   = 24 * time.Hour
 )
 
+var (
+	db  *gorm.DB
+	err error
+)
+
+// User model with input validation
 type User struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username" validate:"required,min=3,max=50"`
-	Password string `json:"password" validate:"required,min=8"`
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	Username  string    `json:"username" gorm:"unique;not null"`
+	Password  string    `json:"password" gorm:"not null"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Student model with input validation
 type Student struct {
-	ID            uint      `json:"id"`
-	UserID        uint      `json:"user_id"`
-	Name          string    `json:"name" validate:"required"`
-	DateOfBirth   time.Time `json:"date_of_birth" validate:"required"`
-	ContactNumber string    `json:"contact_number" validate:"required"`
-	Email         string    `json:"email" validate:"required,email"`
-	Address       string    `json:"address" validate:"required"`
-	Marks         float64   `json:"marks" validate:"required"`
-	GPA           float64   `json:"gpa" validate:"required"`
+	ID            uint      `json:"id" gorm:"primaryKey"`
+	UserID        uint      `json:"user_id" gorm:"not null"`
+	Name          string    `json:"name" gorm:"not null"`
+	DateOfBirth   time.Time `json:"date_of_birth" gorm:"not null"`
+	ContactNumber string    `json:"contact_number" gorm:"not null"`
+	Email         string    `json:"email" gorm:"unique;not null"`
+	Address       string    `json:"address" gorm:"not null"`
+	Marks         float64   `json:"marks" gorm:"not null"`
+	GPA           float64   `json:"gpa" gorm:"not null"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// LoginRequest represents the login request body
+type LoginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// RegisterRequest represents the registration request body
+type RegisterRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// Claims represents JWT claims
+type Claims struct {
+	UserID uint `json:"user_id"`
+	jwt.StandardClaims
 }
 
 func init() {
-	// Load environment variables
-	dsn := os.Getenv("DATABASE_URL")
-	jwtKey = []byte(os.Getenv("JWT_SECRET"))
+	// Use environment variables in production
+	dsn := "user=dbunilink_user password=7Is1S6y4pYXJuGNG26xNMy02gstj04wI dbname=dbunilink host=dpg-cuq59mtsvqrc73f7dnog-a.oregon-postgres.render.com port=5432 sslmode=require TimeZone=UTC"
 
-	// Initialize database connection
 	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		log.Fatal("failed to connect to database:", err)
 	}
 
-	// Initialize validator
-	validate = validator.New()
+	// Auto-migrate the schema
+	err = db.AutoMigrate(&User{}, &Student{})
+	if err != nil {
+		log.Fatal("failed to migrate database:", err)
+	}
 }
 
 func main() {
 	r := gin.Default()
 
-	// Middleware
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"}, // Replace with your frontend URL
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
+	// Add security headers middleware
+	r.Use(securityHeaders())
 
-	r.Use(secure.New(secure.Config{
-		FrameDeny:             true,
-		ContentTypeNosniff:    true,
-		BrowserXssFilter:      true,
-		ContentSecurityPolicy: "default-src 'self'",
-	}))
+	// Rate limiting middleware could be added here
 
-	r.Use(logger.SetLogger())
-
-	// Rate limiting
-	rate, err := limiter.NewRateFromFormatted("10-M") // 10 requests per minute
-	if err != nil {
-		log.Fatal("Failed to configure rate limiter:", err)
-	}
-	store := memory.NewStore()
-	limiterInstance := limiter.New(store, rate)
-	rateLimiterMiddleware := ginmw.NewMiddleware(limiterInstance)
-	r.Use(rateLimiterMiddleware)
-
-	// Routes
+	// Public routes
+	r.GET("/", documentation)
 	r.POST("/register", register)
 	r.POST("/login", login)
-	r.POST("/students/register", authMiddleware(), addStudent)
 
-	// Start the server with HTTPS
-	r.RunTLS(":5000", "cert.pem", "key.pem") // Replace with your SSL certificate and key
+	// Protected routes
+	authorized := r.Group("/")
+	authorized.Use(authMiddleware())
+	{
+		authorized.POST("/students/register", addStudent)
+		authorized.GET("/students/:id", getStudent)
+	}
+
+	r.Run(":5000")
 }
 
-// User registration handler
+// Security headers middleware
+func securityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("X-XSS-Protection", "1; mode=block")
+		c.Header("Content-Security-Policy", "default-src 'self'")
+		c.Next()
+	}
+}
+
+// JWT Authentication middleware
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tokenString := c.GetHeader("Authorization")
+		if tokenString == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			c.Abort()
+			return
+		}
+
+		// Remove "Bearer " prefix if present
+		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			return []byte(JWTSecret), nil
+		})
+
+		if err != nil || !token.Valid {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			c.Abort()
+			return
+		}
+
+		c.Set("userID", claims.UserID)
+		c.Next()
+	}
+}
+
+// Input validation functions
+func validatePassword(password string) error {
+	if len(password) < MinPasswordLength {
+		return fmt.Errorf("password must be at least %d characters", MinPasswordLength)
+	}
+	// Add more password requirements as needed
+	return nil
+}
+
+func validateEmail(email string) error {
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	if !emailRegex.MatchString(email) {
+		return fmt.Errorf("invalid email format")
+	}
+	return nil
+}
+func documentation(c *gin.Context) {
+	html := `
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<title>UniLink API Documentation</title>
+	</head>
+	<body>
+		<h1>Welcome to the Student Management API</h1>
+		<h2>Endpoints</h2>
+		<ul>
+			<li><strong>POST /register</strong> - Register a new user</li>
+			<li><strong>POST /login</strong> - Login and get a JWT token</li>
+			<li><strong>POST /students/register</strong> - Register a new student (requires authentication)</li>
+			<li><strong>GET /students/:id</strong> - Get student details by ID (requires authentication)</li>
+		</ul>
+		<h2>Notes</h2>
+		<ul>
+			<li>All protected routes require a valid JWT token in the Authorization header.</li>
+			<li>JWT token can be obtained by logging in via the /login endpoint.</li>
+		</ul>
+	</body>
+	</html>
+	`
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+}
+
+// User registration handler with improved validation
 func register(c *gin.Context) {
-	var user User
-	if err := c.ShouldBindJSON(&user); err != nil {
-		c.JSON(400, gin.H{"message": "Invalid input"})
+	var req RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
 		return
 	}
 
-	// Validate input
-	if err := validate.Struct(user); err != nil {
-		c.JSON(400, gin.H{"message": "Validation failed", "errors": err.Error()})
+	// Validate password
+	if err := validatePassword(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Check if user already exists
 	var existingUser User
-	if err := db.Where("username = ?", user.Username).First(&existingUser).Error; err == nil {
-		c.JSON(400, gin.H{"message": "Username already exists"})
+	if err := db.Where("username = ?", req.Username).First(&existingUser).Error; err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Username already exists"})
 		return
 	}
 
-	// Hash the password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(500, gin.H{"message": "Failed to hash password"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process registration"})
 		return
 	}
 
-	// Create new user in the database
-	user.Password = string(hashedPassword)
+	user := User{
+		Username: req.Username,
+		Password: string(hashedPassword),
+	}
+
 	if err := db.Create(&user).Error; err != nil {
-		c.JSON(500, gin.H{"message": "Failed to create user"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
 
-	c.JSON(201, gin.H{"message": "User created successfully"})
+	c.JSON(http.StatusCreated, gin.H{"message": "User created successfully"})
 }
 
-// User login handler
+// User login handler with JWT token generation
 func login(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
+		return
+	}
+
 	var user User
-	if err := c.ShouldBindJSON(&user); err != nil {
-		c.JSON(400, gin.H{"message": "Invalid input"})
+	if err := db.Where("username = ?", req.Username).First(&user).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
 
-	// Validate input
-	if err := validate.Struct(user); err != nil {
-		c.JSON(400, gin.H{"message": "Validation failed", "errors": err.Error()})
-		return
-	}
-
-	// Check if user exists
-	var existingUser User
-	if err := db.Where("username = ?", user.Username).First(&existingUser).Error; err != nil {
-		c.JSON(404, gin.H{"message": "User not found"})
-		return
-	}
-
-	// Compare password with stored hash
-	if err := bcrypt.CompareHashAndPassword([]byte(existingUser.Password), []byte(user.Password)); err != nil {
-		c.JSON(401, gin.H{"message": "Invalid credentials"})
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
 
 	// Generate JWT token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"username": existingUser.Username,
-		"exp":      time.Now().Add(time.Hour * 24).Unix(), // Token expires in 24 hours
-	})
+	expirationTime := time.Now().Add(TokenExpiration)
+	claims := &Claims{
+		UserID: user.ID,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+		},
+	}
 
-	tokenString, err := token.SignedString(jwtKey)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(JWTSecret))
 	if err != nil {
-		c.JSON(500, gin.H{"message": "Failed to generate token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
 	}
 
-	c.JSON(200, gin.H{"token": tokenString})
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Logged in successfully",
+		"token":   tokenString,
+	})
 }
 
-// Add student handler
+// Add student handler with improved validation
 func addStudent(c *gin.Context) {
+	userID, _ := c.Get("userID")
+
 	var student Student
 	if err := c.ShouldBindJSON(&student); err != nil {
-		c.JSON(400, gin.H{"message": "Invalid input"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
 		return
 	}
 
-	// Validate input
-	if err := validate.Struct(student); err != nil {
-		c.JSON(400, gin.H{"message": "Validation failed", "errors": err.Error()})
+	// Validate email
+	if err := validateEmail(student.Email); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Create new student in the database
+	// Validate other fields
+	if student.GPA < 0 || student.GPA > 4.0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid GPA"})
+		return
+	}
+
+	if student.Marks < 0 || student.Marks > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid marks"})
+		return
+	}
+
+	student.UserID = userID.(uint)
+
 	if err := db.Create(&student).Error; err != nil {
-		c.JSON(500, gin.H{"message": "Failed to create student"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create student"})
 		return
 	}
 
-	c.JSON(201, gin.H{"message": "Student registered successfully", "student": student})
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Student registered successfully",
+		"student": student,
+	})
 }
 
-// Middleware for JWT authentication
-func authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		tokenString := c.GetHeader("Authorization")
-		if tokenString == "" {
-			c.JSON(401, gin.H{"message": "Authorization token required"})
-			c.Abort()
-			return
-		}
+// Get student handler
+func getStudent(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	studentID := c.Param("id")
 
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			return jwtKey, nil
-		})
-
-		if err != nil || !token.Valid {
-			c.JSON(401, gin.H{"message": "Invalid or expired token"})
-			c.Abort()
-			return
-		}
-
-		c.Next()
+	var student Student
+	if err := db.Where("id = ? AND user_id = ?", studentID, userID).First(&student).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Student not found"})
+		return
 	}
+
+	c.JSON(http.StatusOK, student)
 }
